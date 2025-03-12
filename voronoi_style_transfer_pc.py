@@ -165,7 +165,7 @@ def find_images(rgb_dir, mask_dir, pattern='*.jpg'):
 
     return valid_images
 
-def stylize_panoptic(content, style, vgg, decoder, alpha, device):
+def stylize(content, style, vgg, decoder, alpha, device):
     """
     Perform style transfer on a single panoptic segment.
     """
@@ -175,16 +175,11 @@ def stylize_panoptic(content, style, vgg, decoder, alpha, device):
         output = style_transfer(vgg, decoder, content, style, alpha)
     return output
 
-# Commented out the old select_style function
-# def select_style(semantic_class, styles):
-#     """
-#     Select a style from a different class than the semantic_class.
-#     """
-#     different_classes = [cls for cls in styles.keys() if cls != str(semantic_class)]
-#     if not different_classes:
-#         return random.choice([style for class_styles in styles.values() for style in class_styles])
-#     selected_class = random.choice(different_classes)
-#     return random.choice(styles[selected_class])
+def from_txt(txt_path):
+    """Read image paths from a text file to simplify repeat of erroneous stylizations."""
+    with open(txt_path, 'r') as f:
+        return [Path(line.strip()) for line in f.readlines()]
+
 
 def main():
     parser = argparse.ArgumentParser(description="Masked Style Transfer with Voronoi Regions")
@@ -212,6 +207,8 @@ def main():
                        help='Device to use (cuda/cpu)')
     parser.add_argument('--stylize_proportion', type=float, default=1.0,
                        help='Proportion of image to stylize')
+    parser.add_argument('--txt_path', type=str, default=None,
+                    help='Path to text file containing list of images to stylize (one path per line). If provided, only these images will be stylized.')
     args = parser.parse_args()
 
     # Use args instead of hardcoded values
@@ -236,6 +233,7 @@ def main():
 
         # Create output directory if it doesn't exist
         output_dir.mkdir(parents=True, exist_ok=True)
+
         
         # Prepare model
         decoder = net.decoder
@@ -253,7 +251,17 @@ def main():
 
         # Find image pairs
         # image_pairs = find_image_pairs(content_dir, mask_dir)
-        content_images = find_images(content_dir, mask_dir)
+
+        if args.txt_path is not None:
+            with open(args.txt_path, 'r') as f:
+                content_images = [Path(line.strip()) for line in f.readlines()]
+            print(f'Found {len(content_images)} content images in {args.txt_path}')
+        else:
+            content_images = find_images(content_dir, mask_dir)
+            print(f'Found {len(content_images)} content images')
+
+
+        # content_images = find_images(content_dir, mask_dir)
         # print(f'Found {len(image_pairs)} image pairs')
         print(f'Found {len(content_images)} content images')
 
@@ -281,7 +289,7 @@ def main():
 
         # Process images
         num_images = len(content_images)
-        num_images = 4  # For testing
+        # num_images = 4  # For testing
 
         with tqdm(total=num_images) as pbar:
             for i, content_path in enumerate(sorted(content_images)[:num_images]):  
@@ -325,11 +333,12 @@ def main():
                         style_tensor = style_tf(style_img)
 
                         # Extract the relevant region of the content image
-                        region_mask = (voronoi_mask == id).float()
-                        region_content = content_tensor * region_mask
+                        # region_mask = (voronoi_mask == id).float()
+                        # region_content = content_tensor * region_mask
 
                         # Perform style transfer on the region
-                        stylized_output = stylize_panoptic(region_content, style_tensor, vgg, decoder, alpha, device)
+                        # stylized_output = stylize(region_content, style_tensor, vgg, decoder, alpha, device)
+                        stylized_output = stylize(content_tensor, style_tensor, vgg, decoder, alpha, device)
 
                         # Create and apply mask
                         id_mask = (voronoi_mask == id).float()
@@ -354,12 +363,13 @@ def main():
 
                     # Save style mask
                     new_mask_name = f"{content_name}_style_mask.png"
-                    new_mask_path = out_dir.joinpath(new_mask_name)
+                    new_mask_path = out_dir.joinpath("id_masks", new_mask_name)
+                    new_mask_path.parent.mkdir(parents=True, exist_ok=True)
                     save_voronoi_mask(new_style_mask, new_mask_path)
 
                     # Create and save RGB style mask
                     rgb_array = np.zeros((h, w, 3), dtype=np.uint8)
-                    # for train_id in trainId2label.keys():
+                    # for train_id in trainId2label.keys(): # Apply Cityscapes color map
                     #     rgb_color = trainId2label[train_id].color
                     #     mask = (new_style_mask == train_id)
                     #     rgb_array[mask] = rgb_color
@@ -373,10 +383,11 @@ def main():
                             continue
                         rgb_array[new_style_mask == id] = colors[id]
 
-
+                    # save style masks
                     rgb_image = Image.fromarray(rgb_array)
                     rgb_image_name = f"{content_name}_style_mask_rgb.png"
-                    rgb_image_path = out_dir.joinpath(rgb_image_name)
+                    rgb_image_path = out_dir.joinpath("rgb_masks", rgb_image_name)
+                    rgb_image_path.parent.mkdir(parents=True, exist_ok=True)
                     rgb_image.save(rgb_image_path)
 
                     print(f"Processed {content_path}")
