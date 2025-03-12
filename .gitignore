@@ -4,4 +4,5 @@ models/*.py
 __pycache__*
 LICENSE
 README.md
-*.txt
+*.log
+*.out

@@ -161,7 +161,7 @@ def find_image_pairs(rgb_dir, mask_dir, pattern='*_*_leftImg8bit.png', panoptic_
 
     return image_pairs
 
-def stylize_panoptic(content, style, vgg, decoder, alpha, device):
+def stylize(content, style, vgg, decoder, alpha, device):
     """
     Perform style transfer on a single panoptic segment.
     """
@@ -169,42 +169,52 @@ def stylize_panoptic(content, style, vgg, decoder, alpha, device):
         content = content.to(device).unsqueeze(0)
         style = style.to(device).unsqueeze(0)
         output = style_transfer(vgg, decoder, content, style, alpha)
-    return output
-
-# Commented out the old select_style function
-# def select_style(semantic_class, styles):
-#     """
-#     Select a style from a different class than the semantic_class.
-#     """
-#     different_classes = [cls for cls in styles.keys() if cls != str(semantic_class)]
-#     if not different_classes:
-#         return random.choice([style for class_styles in styles.values() for style in class_styles])
-#     selected_class = random.choice(different_classes)
-#     return random.choice(styles[selected_class])
+    return output 
 
 def main():
     parser = argparse.ArgumentParser(description="Masked Style Transfer with Voronoi Regions")
-    parser.add_argument('--num_points', type=int, help='Number of points for Voronoi diagram', required=True)
-    parser.add_argument('--output_dirs', nargs='+', help='output directories for results', required=True)
+    # Keep existing arguments but make them optional with defaults
+    parser.add_argument('--num_points', type=int, default=50,
+                        help='Number of points for Voronoi diagram')
+    parser.add_argument('--output_dirs', nargs='+', 
+                        help='Output directories for results')
+    
+    # Add new arguments for previously hardcoded variables
+    parser.add_argument('--content_dirs', nargs='+', 
+                        default=['~/datasets/Cityscapes/leftImg8bit/train', 
+                                '~/datasets/Cityscapes/leftImg8bit/val'],
+                        help='Directories containing content images')
+    parser.add_argument('--style_dir', type=str, 
+                        default='~/datasets/train',
+                        help='Directory containing style images')
+    parser.add_argument('--mask_dirs', nargs='+',
+                        default=['~/datasets/Cityscapes/gtFine/train', 
+                                '~/datasets/Cityscapes/gtFine/val'],
+                        help='Directories containing mask images')
+    parser.add_argument('--alpha', type=float, default=1.0,
+                        help='Style transfer strength parameter')
+    parser.add_argument('--content_size', type=int, default=0,
+                        help='Size for content images (0 means original size)')
+    parser.add_argument('--style_size', type=int, default=512,
+                        help='Size for style images')
+    parser.add_argument('--crop', type=int, default=0,
+                        help='Crop size for content images')
+    parser.add_argument('--stylize_proportion', type=float, default=1.0,
+                        help='Proportion of regions to stylize (0.0-1.0)')
     args = parser.parse_args()
 
-    # Define arguments here instead of using argparse
-    content_dirs = ['/home/bhamscher/datasets/Cityscapes/leftImg8bit/train', 
-                    '/home/bhamscher/datasets/Cityscapes/leftImg8bit/val']
-    style_dir = '/home/bhamscher/datasets/train'
-    output_dirs = args.output_dirs
-    mask_dirs = ['/home/bhamscher/datasets/Cityscapes/gtFine/train', 
-                 '/home/bhamscher/datasets/Cityscapes/gtFine/val']
-    alpha = 1.0
-    content_size = 0
-    style_size = 512
-    crop = 0
+    # Get arguments with defaults applied
+    content_dirs = [Path(p).expanduser() for p in args.content_dirs]
+    style_dir = Path(args.style_dir).expanduser()
+    output_dirs = args.output_dirs if args.output_dirs else [f"stylized_output_{args.num_points}_regions" for _ in args.content_dirs]
+    mask_dirs = [Path(p).expanduser() for p in args.mask_dirs]
+    alpha = args.alpha
+    content_size = args.content_size
+    style_size = args.style_size
+    crop = args.crop
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    stylize_proportion = 1.0
-
-    # number of points for Voronoi diagram
+    stylize_proportion = args.stylize_proportion
     num_points = args.num_points
-    stylize_proportion = 1.0 #0.75
 
     for content_dir, output_dir, mask_dir in zip(content_dirs, output_dirs, mask_dirs):
         print(f"Stylizing Images in {content_dir}.")
@@ -297,7 +307,7 @@ def main():
                         style_tensor = style_tf(style_img)
 
                         # Perform style transfer
-                        stylized_output = stylize_panoptic(content_tensor, style_tensor, vgg, decoder, alpha, device)
+                        stylized_output = stylize(content_tensor, style_tensor, vgg, decoder, alpha, device)
 
                         # Create and apply mask
                         id_mask = (voronoi_mask == id).float()
