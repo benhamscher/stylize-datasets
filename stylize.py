@@ -10,6 +10,36 @@ import torch.nn as nn
 import torchvision.transforms
 from torchvision.utils import save_image
 from tqdm import tqdm
+import piexif
+from piexif import helper
+
+def add_style_metadata(img_path, style_id):
+    """Add style transfer information to image metadata"""
+    try:
+        # Read existing EXIF data if it exists
+        exif_dict = piexif.load(img_path)
+    except:
+        # Create new EXIF dict if none exists
+        exif_dict = {"0th":{}, "Exif":{}, "GPS":{}, "1st":{}, "thumbnail":None}
+    
+    # Store style information in UserComment field
+    user_comment = f"style_id:{style_id}"
+    exif_dict["Exif"][piexif.ExifIFD.UserComment] = helper.UserComment.dump(user_comment)
+    
+    # Convert EXIF dict to bytes and insert into image
+    exif_bytes = piexif.dump(exif_dict)
+    piexif.insert(exif_bytes, img_path)
+
+def get_style_id(img_path):
+    """Retrieve style transfer information from metadata"""
+    try:
+        exif_dict = piexif.load(img_path)
+        user_comment = helper.UserComment.load(exif_dict["Exif"][piexif.ExifIFD.UserComment])
+        if user_comment.startswith("style_id:"):
+            return user_comment.split(":")[1]
+    except:
+        return None
+    return None
 
 parser = argparse.ArgumentParser(description='This script applies the AdaIN style transfer method to arbitrary datasets.')
 parser.add_argument('--content-dir', type=str,
@@ -93,7 +123,7 @@ def main():
     decoder = net.decoder
     vgg = net.vgg
 
-    device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("device:", device)
     decoder.eval()
     vgg.eval()
@@ -107,54 +137,61 @@ def main():
 
     content_tf = input_transform(args.content_size, args.crop)
     style_tf = input_transform(args.style_size, 0)
+    
 
 
     # disable decompression bomb errors
     Image.MAX_IMAGE_PIXELS = None
     skipped_imgs = []
-
+    
     # actual style transfer as in AdaIN
     with tqdm(total=len(content_paths)) as pbar:
         for content_path in content_paths:
-            try:
-                content_img = Image.open(content_path).convert('RGB')
-                for style_path in random.sample(styles, args.num_styles):
-                    style_img = Image.open(style_path).convert('RGB')
+            # if str(content_path) == "/home/bhamscher/datasets/PASCALVOC/VOCdevkit/VOC2010/JPEGImages_3_split_cropped/train/2008_003947.jpg":
+                try:
+                    content_img = Image.open(content_path).convert('RGB')
+                    for style_path in random.sample(styles, args.num_styles):
+                        style_img = Image.open(style_path).convert('RGB')
 
-                    content = content_tf(content_img)
-                    style = style_tf(style_img)
-                    style = style.to(device).unsqueeze(0)
-                    content = content.to(device).unsqueeze(0)
-                    with torch.no_grad():
-                        output = style_transfer(vgg, decoder, content, style,
-                                                args.alpha)
-                    output = output.cpu()
+                        content = content_tf(content_img)
+                        # _, h, w = content.shape
+                        resize_transform = torchvision.transforms.Resize((480, 480)) # for Pascal Context
+                        style = style_tf(style_img)
+                        style = style.to(device).unsqueeze(0)
+                        content = content.to(device).unsqueeze(0)
+                        with torch.no_grad():
+                            output = style_transfer(vgg, decoder, content, style,
+                                                    args.alpha)
+                        output = resize_transform(output) # For Pascal Context
+                        output = output.cpu()
 
-                    rel_path = content_path.relative_to(content_dir)
-                    out_dir = output_dir.joinpath(rel_path.parent)
+                        rel_path = content_path.relative_to(content_dir)
+                        out_dir = output_dir.joinpath(rel_path.parent)
 
-                    # create directory structure if it does not exist
-                    if not out_dir.is_dir():
-                        out_dir.mkdir(parents=True)
+                        # create directory structure if it does not exist
+                        if not out_dir.is_dir():
+                            out_dir.mkdir(parents=True)
 
-                    content_name = content_path.stem
-                    style_name = style_path.stem
-                    out_filename = content_name + '-stylized-' + style_name + content_path.suffix
-                    output_name = out_dir.joinpath(out_filename)
+                        content_name = content_path.stem
+                        style_name = style_path.stem
+                        # out_filename = content_name + '-stylized-' + style_name + content_path.suffix
+                        out_filename = content_name + content_path.suffix
+                        output_name = out_dir.joinpath(out_filename)
 
-                    save_image(output, output_name, padding=0) #default image padding is 2.
-                    style_img.close()
-                content_img.close()
-            except OSError as e:
-                print('Skipping stylization of %s due to an error' %(content_path))
-                skipped_imgs.append(content_path)
-                continue
-            except RuntimeError as e:
-                print('Skipping stylization of %s due to an error' %(content_path))
-                skipped_imgs.append(content_path)
-                continue
-            finally:
-                pbar.update(1)
+                        save_image(output, output_name, padding=0) #default image padding is 2.
+                        add_style_metadata(str(output_name), style_name) # Add style transfer information to metadata
+                        style_img.close()
+                    content_img.close()
+                except OSError as e:
+                    print('Skipping stylization of %s due to an error' %(content_path))
+                    skipped_imgs.append(content_path)
+                    continue
+                except RuntimeError as e:
+                    print('Skipping stylization of %s due to an error' %(content_path))
+                    skipped_imgs.append(content_path)
+                    continue
+                finally:
+                    pbar.update(1)
 
     if(len(skipped_imgs) > 0):
         with open(output_dir.joinpath('skipped_imgs.txt'), 'w') as f:
