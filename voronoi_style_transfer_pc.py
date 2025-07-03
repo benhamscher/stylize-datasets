@@ -186,13 +186,13 @@ def main():
     parser.add_argument('--num_points', type=int, help='Number of points for Voronoi diagram', required=True)
     parser.add_argument('--output_dirs', nargs='+', help='Output directories for results', required=True)
     parser.add_argument('--content_dirs', nargs='+', 
-                       default=["/home/bhamscher/datasets/PASCALVOC/VOCdevkit/VOC2010/JPEGImages_2_split_cropped"],
+                       default=["/home/bhamscher/datasets/PASCALVOC/VOCdevkit/VOC2010/JPEGImages_3_split_cropped"],
                        help='Directories containing content images')
     parser.add_argument('--style_dir', type=str,
                        default='/home/bhamscher/datasets/train',
                        help='Directory containing style images')
     parser.add_argument('--mask_dirs', nargs='+',
-                       default=['/home/bhamscher/datasets/PASCALVOC/VOCdevkit/VOC2010/SemsegIDImg_2_split_cropped'],
+                       default=['/home/bhamscher/datasets/PASCALVOC/VOCdevkit/VOC2010/SemsegIDImg_3_split_cropped'],
                        help='Directories containing mask images')
     parser.add_argument('--alpha', type=float, default=1.0,
                        help='Style interpolation weight')
@@ -289,7 +289,7 @@ def main():
 
         # Process images
         num_images = len(content_images)
-        # num_images = 4  # For testing
+        # num_images = 50  # For testing
 
         with tqdm(total=num_images) as pbar:
             for i, content_path in enumerate(sorted(content_images)[:num_images]):  
@@ -297,7 +297,7 @@ def main():
                     np.random.seed(i)
                     # Load content image and masks
                     content_img = Image.open(content_path).convert('RGB')
-                    content_tensor = content_tf(content_img)
+                    content_tensor = content_tf(content_img).to(device)
                     
                     # Get correct dimensions from the tensor
                     _, h, w = content_tensor.shape
@@ -314,15 +314,18 @@ def main():
                         voronoi_mask = voronoi_mask.transpose(0, 1)
                      
                     # Initialize result tensor
-                    result = content_tensor.unsqueeze(0).to(device)
-                    new_style_mask = np.zeros_like(voronoi_mask.numpy())
+                    # result = content_tensor.unsqueeze(0).to(device)
+                    result = torch.zeros_like(content_tensor).unsqueeze(0).to(device)
+                    # new_style_mask = np.zeros_like(voronoi_mask.numpy())
+                    new_style_mask = torch.zeros_like(voronoi_mask)
 
                     # Process each unique ID
                     unique_ids = torch.unique(voronoi_mask)
                     for id in unique_ids:                        
-                        if not stylize_proportion ==1.0 and random.random() > stylize_proportion:
-                            style_class = 0  # Mark as not stylized
-                            new_style_mask[voronoi_mask.numpy() == id.item()] = style_class
+                        if not stylize_proportion == 1.0 and random.random() > stylize_proportion:
+                            style_class = 255  # Mark as not stylized
+                            # new_style_mask[voronoi_mask.numpy() == id.item()] = style_class
+                            new_style_mask[voronoi_mask == id] = style_class
                             continue
 
                         # Select style based on ID
@@ -335,8 +338,9 @@ def main():
                         # Extract the relevant region of the content image
                         # region_mask = (voronoi_mask == id).float()
                         # region_content = content_tensor * region_mask
-
-                        # Perform style transfer on the region
+                        # if i < 5:
+                        #     print(f"Region content shape: {region_content.shape}")
+                        # # Perform style transfer on the region
                         # stylized_output = stylize(region_content, style_tensor, vgg, decoder, alpha, device)
                         stylized_output = stylize(content_tensor, style_tensor, vgg, decoder, alpha, device)
 
@@ -348,6 +352,12 @@ def main():
                         # Save style image ID or 0 if not stylized in new mask
                         style_class = id.item()
                         new_style_mask[voronoi_mask.numpy() == style_class] = int(style_class)
+
+                    id_mask = (new_style_mask == 255).float()
+                    # mask_3d = id_mask.unsqueeze(0).repeat(3, 1, 1).to(device)
+                    mask_3d = id_mask.repeat(3, 1, 1).unsqueeze(0).to(device)
+                    result += mask_3d * content_tensor
+
 
                     # Create output directory structure
                     content_path = Path(content_path)
@@ -365,7 +375,7 @@ def main():
                     new_mask_name = f"{content_name}_style_mask.png"
                     new_mask_path = out_dir.joinpath("id_masks", new_mask_name)
                     new_mask_path.parent.mkdir(parents=True, exist_ok=True)
-                    save_voronoi_mask(new_style_mask, new_mask_path)
+                    save_voronoi_mask(new_style_mask.numpy(), new_mask_path)
 
                     # Create and save RGB style mask
                     rgb_array = np.zeros((h, w, 3), dtype=np.uint8)
@@ -379,7 +389,7 @@ def main():
                     colors = {id: np.random.randint(0, 255, 3) for id in unique_ids if id != 0}
 
                     for id in unique_ids:
-                        if id == 0:
+                        if id == 255:
                             continue
                         rgb_array[new_style_mask == id] = colors[id]
 
@@ -389,11 +399,12 @@ def main():
                     rgb_image_path = out_dir.joinpath("rgb_masks", rgb_image_name)
                     rgb_image_path.parent.mkdir(parents=True, exist_ok=True)
                     rgb_image.save(rgb_image_path)
-
-                    print(f"Processed {content_path}")
-                    print(f"Saved stylized image to {output_name}")
-                    print(f"Saved style mask to {new_mask_path}")
-                    print(f"Saved RGB style mask to {rgb_image_path}")
+                    
+                    # for debugging
+                    # print(f"Processed {content_path}")
+                    # print(f"Saved stylized image to {output_name}")
+                    # print(f"Saved style mask to {new_mask_path}")
+                    # print(f"Saved RGB style mask to {rgb_image_path}")
 
                 except Exception as e:
                     print(f'Skipping stylization of {content_path} due to an error: {str(e)}')

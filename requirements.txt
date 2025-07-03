@@ -3,3 +3,5 @@ Pillow
 torch
 torchvision
 tqdm
+numpy
+scipy
